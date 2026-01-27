@@ -1,0 +1,12 @@
+[
+  [
+    "1769539130266",
+    {
+      "email": "nwagh008@gmail.com",
+      "enableDailyReminder": true,
+      "enableEndOfDaySummary": true,
+      "reminderTime": "09:00",
+      "summaryTime": "21:00"
+    }
+  ]
+]
