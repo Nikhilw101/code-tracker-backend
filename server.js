@@ -282,19 +282,24 @@ app.get('/api/leetcode/:username/recent', async (req, res) => {
 });
 
 // Scheduled tasks
-cron.schedule('0 * * * *', async () => {
+// Scheduled Logic
+const runScheduledChecks = async (forceHour = null) => {
     const now = new Date();
-    const currentHour = now.getHours();
-    console.log(`⏰ Cron Job: Checking schedule at hour ${currentHour}`);
+    const currentHour = forceHour !== null ? forceHour : now.getHours();
+    console.log(`⏰ Scheduled Check: Checking schedule for hour ${currentHour}`);
 
     const ALERT_HOURS = [10, 18, 22];
 
     if (ALERT_HOURS.includes(currentHour)) {
         try {
             const users = await User.find({});
+            console.log(`Found ${users.length} users to check.`);
+
             for (const user of users) {
                 if (!user.email) continue;
                 if (!user.preferences.enableEndOfDaySummary && !user.preferences.enableDailyReminder) continue;
+
+                console.log(`Processing user: ${user.username}`);
 
                 // Prepare Data
                 let lcStats = null;
@@ -308,11 +313,6 @@ cron.schedule('0 * * * *', async () => {
 
                 const appStats = calculateAppStats(user);
 
-                // Strategy: 
-                // If it's 22:00 (End of Day), send the BIG Master Summary
-                // If it's 10:00 or 18:00, maybe just send Reminder? 
-                // User asked for "3 times a day... summary... status". Let's send Master Summary for all 3 for now as requested.
-
                 await require('./emailService').sendMasterSummary(
                     user.email,
                     user.username,
@@ -321,10 +321,37 @@ cron.schedule('0 * * * *', async () => {
                     lcRecent
                 );
             }
+            return { success: true, count: users.length };
         } catch (error) {
-            console.error('Cron Job Error:', error);
+            console.error('Scheduled Check Error:', error);
+            return { success: false, error: error.message };
         }
+    } else {
+        console.log(`Current hour ${currentHour} is not an alert hour. Skipping.`);
+        return { success: true, skipped: true, currentHour };
     }
+};
+
+// External Cron Trigger Endpoint
+app.get('/api/cron/trigger', async (req, res) => {
+    try {
+        // Allow voluntary force param for testing ?hour=22
+        const forceHour = req.query.hour ? parseInt(req.query.hour) : null;
+
+        // Optional: Verify a secret if you want to secure this
+        // const authHeader = req.headers['authorization'];
+        // if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) { return res.status(401).json({ error: 'Unauthorized' }); }
+
+        const result = await runScheduledChecks(forceHour);
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Internal Cron (Backup/Development)
+cron.schedule('0 * * * *', async () => {
+    await runScheduledChecks();
 });
 
 // Start server

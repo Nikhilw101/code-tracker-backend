@@ -2,13 +2,20 @@ const nodemailer = require('nodemailer');
 require('dotenv').config();
 
 // Create transporter
+// Create transporter
 const createTransporter = () => {
   return nodemailer.createTransport({
-    service: 'gmail', // or 'outlook', 'yahoo', etc.
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true, // true for 465, false for other ports
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASS,
     },
+    // Interaction timeout settings (in ms)
+    connectionTimeout: 10000, // Wait 10s for connection
+    greetingTimeout: 5000,    // Wait 5s for greeting
+    socketTimeout: 10000,     // Wait 10s for socket operations
   });
 };
 
@@ -318,278 +325,99 @@ const getEndOfDaySummaryTemplate = (username, stats) => {
   };
 };
 
+// Send email with fallback strategy
+const sendEmailWithFallback = async (to, subject, html) => {
+  // 1. Try Nodemailer (Gmail)
+  try {
+    const transporter = createTransporter();
+    const info = await transporter.sendMail({
+      from: `"LeetCode Tracker" <${process.env.EMAIL_USER}>`,
+      to: to,
+      subject: subject,
+      html: html,
+    });
+    console.log('Email sent via Nodemailer:', info.messageId);
+    return { success: true, method: 'nodemailer', messageId: info.messageId };
+  } catch (error) {
+    console.error('Nodemailer failed:', error.message);
+
+    // 2. Try Resend API as Fallback
+    if (process.env.RESEND_API_KEY) {
+      console.log('Attempting fallback to Resend API...');
+      return await sendViaResend(to, subject, html);
+    }
+
+    return { success: false, error: error.message };
+  }
+};
+
+// Send via Resend API
+const sendViaResend = async (to, subject, html) => {
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.RESEND_API_KEY}`
+      },
+      body: JSON.stringify({
+        from: 'onboarding@resend.dev', // Default testing domain
+        to: to,
+        subject: subject,
+        html: html
+      })
+    });
+
+    const data = await response.json();
+
+    if (response.ok) {
+      console.log('Email sent via Resend:', data.id);
+      return { success: true, method: 'resend', messageId: data.id };
+    } else {
+      console.error('Resend API Error:', data);
+      return { success: false, error: data.message || 'Resend API failed', details: data };
+    }
+  } catch (error) {
+    console.error('Resend Fetch Error:', error);
+    return { success: false, error: 'Resend network error' };
+  }
+};
+
 // Send Daily Reminder
 const sendDailyReminder = async (to, username, todayCompleted, dailyGoal) => {
   const remaining = Math.max(0, dailyGoal - todayCompleted);
   const template = getDailyReminderTemplate(username, todayCompleted, dailyGoal, remaining);
-
-  const transporter = createTransporter();
-
-  try {
-    const info = await transporter.sendMail({
-      from: `"LeetCode Tracker" <${process.env.EMAIL_USER}>`,
-      to: to,
-      subject: template.subject,
-      html: template.html,
-    });
-
-    console.log('Daily reminder sent:', info.messageId);
-    return { success: true, messageId: info.messageId };
-  } catch (error) {
-    console.error('Error sending daily reminder:', error);
-    return { success: false, error: error.message };
-  }
+  return await sendEmailWithFallback(to, template.subject, template.html);
 };
 
 // Send End of Day Summary
 const sendEndOfDaySummary = async (to, username, stats) => {
   const template = getEndOfDaySummaryTemplate(username, stats);
-
-  const transporter = createTransporter();
-
-  try {
-    const info = await transporter.sendMail({
-      from: `"LeetCode Tracker" <${process.env.EMAIL_USER}>`,
-      to: to,
-      subject: template.subject,
-      html: template.html,
-    });
-
-    console.log('End of day summary sent:', info.messageId);
-    return { success: true, messageId: info.messageId };
-  } catch (error) {
-    console.error('Error sending end of day summary:', error);
-    return { success: false, error: error.message };
-  }
+  return await sendEmailWithFallback(to, template.subject, template.html);
 };
 
 // Test email configuration
 const testEmailConfig = async (to) => {
-  const transporter = createTransporter();
-
-  try {
-    await transporter.verify();
-    console.log('Email server is ready');
-
-    // Send test email
-    const info = await transporter.sendMail({
-      from: `"LeetCode Tracker" <${process.env.EMAIL_USER}>`,
-      to: to,
-      subject: '✅ Email Notifications Configured Successfully!',
-      html: `
-        <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #6366f1;">🎉 Success!</h2>
-          <p>Your email notifications are now set up and ready to go!</p>
-          <p>You'll receive:</p>
-          <ul>
-            <li>Daily reminders about your progress</li>
-            <li>End-of-day summaries of your achievements</li>
-          </ul>
-          <p>Happy coding! 💻</p>
-        </div>
-      `,
-    });
-
-    return { success: true, messageId: info.messageId };
-  } catch (error) {
-    console.error('Email configuration test failed:', error);
-    return { success: false, error: error.message };
-  }
-};
-
-// LeetCode Summary Template
-const getLeetCodeSummaryTemplate = (username, stats, recentSubmissions) => {
-  return {
-    subject: `📅 LeetCode Update: ${stats.totalSolved} Solved!`,
-    html: `
-      <!DOCTYPE html>
-      <html>
-      <body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px;">
-        <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-          <div style="background: #ffa116; color: white; padding: 25px; text-align: center;">
-            <h1 style="margin: 0;">LeetCode Progress Tracker</h1>
-          </div>
-          
-          <div style="padding: 25px;">
-            <h2>Hello ${username}! 👋</h2>
-            <p>Here is your current LeetCode standing according to your linked profile.</p>
-            
-            <div style="display: flex; justify-content: space-around; background: #f9f9f9; padding: 15px; border-radius: 8px; margin: 20px 0;">
-                <div style="text-align: center;">
-                    <div style="font-size: 24px; font-weight: bold; color: #10b981;">${stats.easySolved}</div>
-                    <div style="font-size: 12px; color: #666;">Easy</div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="font-size: 24px; font-weight: bold; color: #f59e0b;">${stats.mediumSolved}</div>
-                    <div style="font-size: 12px; color: #666;">Medium</div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="font-size: 24px; font-weight: bold; color: #ef4444;">${stats.hardSolved}</div>
-                    <div style="font-size: 12px; color: #666;">Hard</div>
-                </div>
-            </div>
-            
-            <div style="text-align: center; font-size: 18px; margin-bottom: 20px;">
-                Total Solved: <strong>${stats.totalSolved}</strong>
-            </div>
-
-            <h3>Recent Activity 🕒</h3>
-            <ul style="list-style: none; padding: 0;">
-                ${recentSubmissions.slice(0, 5).map(sub => `
-                    <li style="padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between;">
-                        <span>${sub.title}</span>
-                        <span style="color: #666; font-size: 12px;">${new Date(sub.timestamp * 1000).toLocaleDateString()}</span>
-                    </li>
-                `).join('')}
-            </ul>
-
-            <center style="margin-top: 30px;">
-              <a href="https://leetcode.com/${username}" style="background: #ffa116; color: white; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold;">View Profile</a>
-            </center>
-          </div>
-        </div>
-      </body>
-      </html>
-    `
-  };
+  // Test both or just generic? using fallback wrapper to test real flow
+  const subject = '✅ Email Notifications Configured Successfully!';
+  const html = `
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #6366f1;">🎉 Success!</h2>
+      <p>Your email notifications are now set up and ready to go!</p>
+      <p>This email confirms that your sending pipeline (Nodemailer or Resend) is working.</p>
+    </div>
+  `;
+  return await sendEmailWithFallback(to, subject, html);
 };
 
 const sendLeetCodeSummary = async (to, username, stats, recentSubmissions) => {
   const template = getLeetCodeSummaryTemplate(username, stats, recentSubmissions);
-  const transporter = createTransporter();
-
-  try {
-    const info = await transporter.sendMail({
-      from: `"LeetCode Tracker" <${process.env.EMAIL_USER}>`,
-      to: to,
-      subject: template.subject,
-      html: template.html,
-    });
-    console.log(`LeetCode summary sent to ${to}`);
-    return { success: true, messageId: info.messageId };
-  } catch (error) {
-    console.error('Error sending LeetCode summary:', error);
-    return { success: false, error: error.message };
-  }
-};
-
-// Combined Master Summary Template
-const getMasterSummaryTemplate = (username, appStats, leetcodeStats, recentSubmissions) => {
-  const { todayCompleted, dailyGoal, totalSolved: appTotal, streak } = appStats;
-  const { easySolved, mediumSolved, hardSolved, totalSolved: lcTotal } = leetcodeStats || { easySolved: 0, mediumSolved: 0, hardSolved: 0, totalSolved: 0 };
-
-  // Dynamic Greeting based on goal
-  const goalMet = todayCompleted >= dailyGoal;
-  const greeting = goalMet ? "🎉 Amazing Work Today!" : "👊 Keep Pushing!";
-  const message = goalMet
-    ? `You smashed your daily goal of ${dailyGoal} problems.`
-    : `You completed ${todayCompleted} out of ${dailyGoal} problems today. Consitency is key!`;
-
-  return {
-    subject: `📊 Daily Report: ${todayCompleted} App / ${lcTotal || 0} LeetCode`,
-    html: `
-      <!DOCTYPE html>
-      <html>
-      <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; padding: 20px; margin: 0;">
-        <div style="max-width: 650px; margin: 0 auto; background: white; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);">
-          
-          <!-- Header -->
-          <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; padding: 30px; text-align: center;">
-            <h1 style="margin: 0; font-size: 26px;">Daily Coding Recap</h1>
-            <p style="margin: 10px 0 0 0; opacity: 0.9;">${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
-          </div>
-          
-          <div style="padding: 30px;">
-            <!-- Greeting & Main App Stats -->
-            <div style="text-align: center; margin-bottom: 30px;">
-              <h2 style="color: #1f2937; margin-bottom: 10px;">${greeting}</h2>
-              <p style="color: #4b5563; font-size: 16px; line-height: 1.5; margin: 0;">${message}</p>
-            </div>
-
-            <div style="display: flex; gap: 15px; margin-bottom: 30px;">
-                <div style="flex: 1; background: #eff6ff; padding: 20px; border-radius: 12px; text-align: center;">
-                    <div style="font-size: 32px; font-weight: 800; color: #3b82f6;">${todayCompleted}</div>
-                    <div style="font-size: 12px; font-weight: 600; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Today's Count</div>
-                </div>
-                <div style="flex: 1; background: #fff7ed; padding: 20px; border-radius: 12px; text-align: center;">
-                    <div style="font-size: 32px; font-weight: 800; color: #f97316;">${streak}🔥</div>
-                    <div style="font-size: 12px; font-weight: 600; color: #9a3412; text-transform: uppercase; letter-spacing: 0.5px;">Day Streak</div>
-                </div>
-            </div>
-
-            <!-- LeetCode Stats Section -->
-            ${leetcodeStats ? `
-            <div style="border-top: 2px solid #f3f4f6; padding-top: 30px; margin-top: 30px;">
-                <h3 style="color: #1f2937; margin-bottom: 20px; display: flex; align-items: center; gap: 10px;">
-                    <span>🚀</span> Live LeetCode Stats
-                </h3>
-                
-                <div style="display: flex; justify-content: space-between; background: #f9fafb; padding: 20px; border-radius: 12px; border: 1px solid #e5e7eb;">
-                    <div style="text-align: center;">
-                        <span style="display: block; font-size: 20px; font-weight: bold; color: #10b981;">${easySolved}</span>
-                        <span style="font-size: 12px; color: #6b7280;">Easy</span>
-                    </div>
-                    <div style="text-align: center; border-left: 1px solid #e5e7eb; border-right: 1px solid #e5e7eb; padding: 0 20px; flex: 1;">
-                        <span style="display: block; font-size: 20px; font-weight: bold; color: #f59e0b;">${mediumSolved}</span>
-                        <span style="font-size: 12px; color: #6b7280;">Medium</span>
-                    </div>
-                    <div style="text-align: center;">
-                        <span style="display: block; font-size: 20px; font-weight: bold; color: #ef4444;">${hardSolved}</span>
-                        <span style="font-size: 12px; color: #6b7280;">Hard</span>
-                    </div>
-                </div>
-                
-                <div style="text-align: center; margin-top: 15px; font-size: 14px; color: #6b7280;">
-                    Total Solved on Profile: <strong>${lcTotal}</strong>
-                </div>
-            </div>
-            ` : ''}
-
-            <!-- Recent Activity -->
-            ${recentSubmissions && recentSubmissions.length > 0 ? `
-            <div style="margin-top: 30px;">
-                <h3 style="color: #1f2937; margin-bottom: 15px; font-size: 16px;">Recent Submissions</h3>
-                <div style="background: white; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
-                    ${recentSubmissions.slice(0, 5).map((sub, i) => `
-                        <div style="padding: 12px 15px; border-bottom: ${i === 4 ? 'none' : '1px solid #f3f4f6'}; display: flex; justify-content: space-between; align-items: center;">
-                            <span style="font-weight: 500; color: #374151;">${sub.title}</span>
-                            <span style="font-size: 12px; color: #9ca3af;">${new Date(sub.timestamp * 1000).toLocaleDateString()}</span>
-                        </div>
-                    `).join('')}
-                </div>
-            </div>
-            ` : ''}
-
-            <!-- Footer -->
-            <div style="text-align: center; margin-top: 40px;">
-              <a href="http://localhost:5173" style="background: #4f46e5; color: white; padding: 12px 30px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px; display: inline-block;">Go to Dashboard</a>
-              <p style="margin-top: 20px; font-size: 12px; color: #9ca3af;">LeetCode Tracker • Keep coding!</p>
-            </div>
-          </div>
-        </div>
-      </body>
-      </html>
-    `
-  };
+  return await sendEmailWithFallback(to, template.subject, template.html);
 };
 
 const sendMasterSummary = async (to, username, appStats, leetcodeStats, recentSubmissions) => {
   const template = getMasterSummaryTemplate(username, appStats, leetcodeStats, recentSubmissions);
-  const transporter = createTransporter();
-
-  try {
-    const info = await transporter.sendMail({
-      from: `"LeetCode Tracker" <${process.env.EMAIL_USER}>`,
-      to: to,
-      subject: template.subject,
-      html: template.html,
-    });
-    console.log(`Master Summary sent to ${to}`);
-    return { success: true, messageId: info.messageId };
-  } catch (error) {
-    console.error('Error sending Master Summary:', error);
-    return { success: false, error: error.message };
-  }
+  return await sendEmailWithFallback(to, template.subject, template.html);
 };
 
 module.exports = {
