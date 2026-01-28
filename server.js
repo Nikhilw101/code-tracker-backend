@@ -14,6 +14,16 @@ app.use(express.json());
 const connectDB = require('./db');
 const User = require('./models/User');
 
+// Global Error Handlers for process stability
+process.on('uncaughtException', (err) => {
+    console.error('🔥 UNCAUGHT EXCEPTION! Shutting down...', err);
+    // Ideally restart process, but for dev we log
+});
+
+process.on('unhandledRejection', (err) => {
+    console.error('🔥 UNHANDLED REJECTION! Shutting down...', err);
+});
+
 // Connect to Database
 connectDB();
 
@@ -285,49 +295,81 @@ app.get('/api/leetcode/:username/recent', async (req, res) => {
 // Scheduled Logic
 const runScheduledChecks = async (forceHour = null) => {
     const now = new Date();
-    const currentHour = forceHour !== null ? forceHour : now.getHours();
-    console.log(`⏰ Scheduled Check: Checking schedule for hour ${currentHour}`);
+
+    // Convert to IST (Asia/Kolkata) timezone
+    const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const currentHour = forceHour !== null ? forceHour : istTime.getHours();
+
+    // Enhanced logging
+    console.log(`\n⏰ ===== Scheduled Email Check =====`);
+    console.log(`🌍 Server Time (UTC): ${now.toISOString()}`);
+    console.log(`🇮🇳 IST Time: ${istTime.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hour12: false })}`);
+    console.log(`🕐 Current IST Hour: ${currentHour}`);
+    console.log(`${forceHour !== null ? '⚡ FORCED HOUR MODE' : ''}`);
 
     const ALERT_HOURS = [10, 18, 22];
 
     if (ALERT_HOURS.includes(currentHour)) {
+        console.log(`✅ Hour ${currentHour} matches alert schedule - Processing users...`);
         try {
             const users = await User.find({});
-            console.log(`Found ${users.length} users to check.`);
+            console.log(`📋 Found ${users.length} users to check.`);
 
             for (const user of users) {
                 if (!user.email) continue;
                 if (!user.preferences.enableEndOfDaySummary && !user.preferences.enableDailyReminder) continue;
 
-                console.log(`Processing user: ${user.username}`);
+                console.log(`\n📧 Processing user: ${user.username} (${user.email})`);
 
                 // Prepare Data
                 let lcStats = null;
                 let lcRecent = null;
-                if (user.leetcodeUsername) {
-                    const s = await getLeetCodeStats(user.leetcodeUsername);
-                    const r = await getRecentSubmissions(user.leetcodeUsername);
-                    if (s.success) lcStats = s.data;
-                    if (r.success) lcRecent = r.data;
+
+                try {
+                    if (user.leetcodeUsername) {
+                        console.log(`Debug: Fetching LC stats for ${user.leetcodeUsername}`);
+                        const s = await getLeetCodeStats(user.leetcodeUsername);
+                        console.log(`Debug: LC stats fetched. Success: ${s.success}`);
+
+                        console.log(`Debug: Fetching Recent submissions`);
+                        const r = await getRecentSubmissions(user.leetcodeUsername);
+                        console.log(`Debug: Recent fetched. Success: ${r.success}`);
+
+                        if (s.success) lcStats = s.data;
+                        if (r.success) lcRecent = r.data;
+                    }
+                } catch (lcError) {
+                    console.error('Debug: LeetCode Service Error', lcError);
                 }
 
+                console.log('Debug: Calculating App Stats');
                 const appStats = calculateAppStats(user);
 
-                await require('./emailService').sendMasterSummary(
+                console.log('Debug: Sending Email via Service');
+                // Use the required module directly or rely on the cached require
+                const emailService = require('./emailService');
+                if (!emailService.sendMasterSummary) {
+                    console.error('CRITICAL: sendMasterSummary function missing on emailService export!');
+                    console.log('Available exports:', Object.keys(emailService));
+                }
+
+                await emailService.sendMasterSummary(
                     user.email,
                     user.username,
                     appStats,
                     lcStats,
                     lcRecent
                 );
+                console.log('Debug: Email sent function completed');
             }
+            console.log(`\n✅ Scheduled check complete - Processed ${users.length} users`);
             return { success: true, count: users.length };
         } catch (error) {
-            console.error('Scheduled Check Error:', error);
+            console.error('❌ Scheduled Check Error:', error);
             return { success: false, error: error.message };
         }
     } else {
-        console.log(`Current hour ${currentHour} is not an alert hour. Skipping.`);
+        console.log(`⏭️  Hour ${currentHour} is not an alert hour (${ALERT_HOURS.join(', ')}). Skipping.`);
         return { success: true, skipped: true, currentHour };
     }
 };
@@ -354,9 +396,19 @@ cron.schedule('0 * * * *', async () => {
     await runScheduledChecks();
 });
 
-// Start server
-app.listen(PORT, () => {
-    console.log(`✅ Backend server running on http://localhost:${PORT}`);
-    console.log(`📧 Email service ready`);
-    console.log(`⏰ Scheduled tasks initialized`);
-});
+// Start server with DB connection check
+const startServer = async () => {
+    try {
+        await connectDB();
+        app.listen(PORT, () => {
+            console.log(`✅ Backend server running on http://localhost:${PORT}`);
+            console.log(`📧 Email service ready`);
+            console.log(`⏰ Scheduled tasks initialized`);
+        });
+    } catch (error) {
+        console.error('Failed to start server:', error);
+        process.exit(1);
+    }
+};
+
+startServer();
