@@ -392,12 +392,21 @@ app.get('/api/cron/trigger', async (req, res) => {
 });
 
 // Internal Cron (Backup/Development)
-// Note: Commented out for Vercel deployment - use external cron service (cron-job.org)
-// to call /api/cron/trigger endpoint at scheduled times
-// For local development, uncomment the line below:
-// cron.schedule('0 * * * *', async () => {
-//     await runScheduledChecks();
-// });
+// For Render/Local: This will run as long as the server is awake.
+cron.schedule('0 * * * *', async () => {
+    console.log('Running automated hourly check...');
+    await runScheduledChecks();
+});
+
+// Self-pinging to keep Render Free Tier awake during active hours (optional but helpful)
+// Note: Render free tier still sleeps after 15m of NO traffic. 
+// This internal interval only helps if the server is already awake.
+setInterval(() => {
+    const hour = new Date().getUTCHours() + 5.5; // Rough IST conversion
+    if (hour >= 9 && hour <= 23) {
+        console.log('Keep-alive: Internal heartbeat');
+    }
+}, 14 * 60 * 1000); // Every 14 minutes
 
 // Start server with DB connection check (only for local development)
 const startServer = async () => {
