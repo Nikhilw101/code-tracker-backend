@@ -392,11 +392,14 @@ app.get('/api/cron/trigger', async (req, res) => {
 });
 
 // Internal Cron (Backup/Development)
-cron.schedule('0 * * * *', async () => {
-    await runScheduledChecks();
-});
+// Note: Commented out for Vercel deployment - use external cron service (cron-job.org)
+// to call /api/cron/trigger endpoint at scheduled times
+// For local development, uncomment the line below:
+// cron.schedule('0 * * * *', async () => {
+//     await runScheduledChecks();
+// });
 
-// Start server with DB connection check
+// Start server with DB connection check (only for local development)
 const startServer = async () => {
     try {
         await connectDB();
@@ -404,6 +407,7 @@ const startServer = async () => {
             console.log(`✅ Backend server running on http://localhost:${PORT}`);
             console.log(`📧 Email service ready`);
             console.log(`⏰ Scheduled tasks initialized`);
+            console.log(`💡 For Vercel: Use external cron service to call /api/cron/trigger`);
         });
     } catch (error) {
         console.error('Failed to start server:', error);
@@ -411,4 +415,13 @@ const startServer = async () => {
     }
 };
 
-startServer();
+// Only start server if not in Vercel serverless environment
+if (process.env.VERCEL !== '1') {
+    startServer();
+} else {
+    // In Vercel, just connect to DB
+    connectDB();
+}
+
+// Export the Express app for Vercel serverless functions
+module.exports = app;

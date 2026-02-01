@@ -194,6 +194,25 @@ EMAIL_PASS=your-app-password
 - Use App Passwords instead of regular passwords
 - The `.env` file is already in `.gitignore`
 
+## Deployment
+
+### Vercel Deployment (Recommended)
+
+This backend is configured for serverless deployment on Vercel. See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for complete step-by-step instructions including:
+
+- Vercel setup and configuration
+- Environment variable setup
+- External cron service configuration (for scheduled emails)
+- Troubleshooting guide
+
+**Quick Deploy:**
+1. Push code to GitHub
+2. Import repository to Vercel
+3. Add environment variables (`MONGODB_URI`, `EMAIL_USER`, `EMAIL_PASS`)
+4. Deploy!
+
+For scheduled emails, you'll need to set up an external cron service (like cron-job.org) since Vercel's free tier doesn't support cron jobs. Full instructions in [DEPLOYMENT.md](./DEPLOYMENT.md).
+
 ## Development
 
 To modify email templates, edit `emailService.js`:
