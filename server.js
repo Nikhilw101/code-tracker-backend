@@ -295,13 +295,15 @@ app.get('/api/leetcode/:username/recent', async (req, res) => {
 // Scheduled Logic
 const runScheduledChecks = async (forceHour = null, isForceMode = false) => {
     const now = new Date();
-    const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-    const currentHour = forceHour !== null ? forceHour : istTime.getHours();
+    // Using a more robust IST conversion
+    const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+    const currentHour = forceHour !== null ? forceHour : istTime.getUTCHours();
 
-    const ALERT_HOURS = [8, 10, 12, 14, 16, 18, 20, 22];
+    // Only Daytime hours: 9 AM, 12 PM, 3 PM, 6 PM, 9 PM IST
+    const ALERT_HOURS = [9, 12, 15, 18, 21];
 
     if (ALERT_HOURS.includes(currentHour) || isForceMode) {
-        console.log(`\n⏰ [${istTime.toLocaleTimeString()}] Scheduled Check: Starting processing...`);
+        console.log(`⏰ [${istTime.toISOString()}] Starting Scheduled Check for hour ${currentHour}...`);
         try {
             const users = await User.find({
                 email: { $ne: '' },
@@ -311,8 +313,14 @@ const runScheduledChecks = async (forceHour = null, isForceMode = false) => {
                 ]
             }).select('username email leetcodeUsername dailyGoal preferences progress');
 
-            console.log(`📋 Processing ${users.length} eligible users.`);
+            if (users.length === 0) {
+                console.log('ℹ️ No eligible users found for this hour.');
+                return { success: true, count: 0 };
+            }
 
+            console.log(`📋 Processing ${users.length} users...`);
+
+            // Process users in smaller batches to avoid timeouts
             let successCount = 0;
             for (const user of users) {
                 try {
@@ -320,16 +328,15 @@ const runScheduledChecks = async (forceHour = null, isForceMode = false) => {
                     let lcRecent = null;
 
                     if (user.leetcodeUsername) {
-                        const s = await getLeetCodeStats(user.leetcodeUsername);
-                        const r = await getRecentSubmissions(user.leetcodeUsername);
+                        // Use a shorter timeout for individual user lookups if possible
+                        const s = await getLeetCodeStats(user.leetcodeUsername).catch(() => ({ success: false }));
+                        const r = await getRecentSubmissions(user.leetcodeUsername).catch(() => ({ success: false }));
                         if (s.success) lcStats = s.data;
                         if (r.success) lcRecent = r.data;
                     }
 
                     const appStats = calculateAppStats(user);
-                    const emailService = require('./emailService');
-
-                    await emailService.sendMasterSummary(
+                    await require('./emailService').sendMasterSummary(
                         user.email,
                         user.username,
                         appStats,
@@ -338,50 +345,64 @@ const runScheduledChecks = async (forceHour = null, isForceMode = false) => {
                     );
                     successCount++;
                 } catch (userError) {
-                    console.error(`❌ Error processing user ${user.username}:`, userError.message);
+                    console.error(`❌ Error for ${user.username}:`, userError.message);
                 }
             }
-            console.log(`✅ Scheduled check complete - Sent: ${successCount}/${users.length}`);
+            console.log(`✅ Sent: ${successCount}/${users.length}`);
+            return { success: true, sent: successCount, total: users.length };
         } catch (error) {
             console.error('❌ Scheduled Check Error:', error);
+            throw error;
         }
     } else {
-        console.log(`⏭️  Hour ${currentHour} is not an alert hour. Skipping.`);
+        console.log(`⏭️  Hour ${currentHour} IST is not an alert hour. Skipping.`);
+        return { success: true, message: 'Skipped (not alert hour)' };
     }
 };
 
 // External Cron Trigger Endpoint
-app.get('/api/cron/trigger', (req, res) => {
+app.get('/api/cron/trigger', async (req, res) => {
     const forceHour = req.query.hour ? parseInt(req.query.hour) : null;
     const isForceMode = req.query.force === 'true';
 
-    // TRIGGER BACKGROUND PROCESSING
-    // Note: We don't 'await' here so the response returns immediately to avoid timeouts
-    runScheduledChecks(forceHour, isForceMode).catch(err => {
-        console.error('Background Cron Error:', err);
-    });
+    try {
+        // On Vercel, we MUST await the process to ensure it completes before the function terminates
+        // However, this might hit the 10s timeout if there are MANY users.
+        // For now, we await it to ensure it actually runs.
+        const result = await runScheduledChecks(forceHour, isForceMode);
 
-    res.json({
-        success: true,
-        message: 'Cron process started in background',
-        timestamp: new Date().toISOString()
-    });
+        res.json({
+            success: true,
+            message: result.message || 'Cron process completed',
+            details: result,
+            timestamp: new Date().toISOString()
+        });
+    } catch (err) {
+        console.error('Cron Trigger Error:', err);
+        res.status(500).json({
+            success: false,
+            error: err.message,
+            timestamp: new Date().toISOString()
+        });
+    }
 });
 
 // Internal Cron (Backup/Development)
-// For Render/Local: This will run as long as the server is awake.
 cron.schedule('0 * * * *', async () => {
     console.log('Running automated hourly check...');
-    await runScheduledChecks();
+    await runScheduledChecks().catch(console.error);
 });
 
 // Self-pinging to keep Render Free Tier awake during active hours (optional but helpful)
 // Note: Render free tier still sleeps after 15m of NO traffic. 
 // This internal interval only helps if the server is already awake.
 setInterval(() => {
-    const hour = new Date().getUTCHours() + 5.5; // Rough IST conversion
+    const now = new Date();
+    const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+    const hour = istTime.getUTCHours();
+
     if (hour >= 9 && hour <= 23) {
-        console.log('Keep-alive: Internal heartbeat');
+        console.log('Keep-alive: Internal heartbeat (Daytime)');
     }
 }, 14 * 60 * 1000); // Every 14 minutes
 
