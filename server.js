@@ -293,102 +293,79 @@ app.get('/api/leetcode/:username/recent', async (req, res) => {
 
 // Scheduled tasks
 // Scheduled Logic
-const runScheduledChecks = async (forceHour = null) => {
+const runScheduledChecks = async (forceHour = null, isForceMode = false) => {
     const now = new Date();
-
-    // Convert to IST (Asia/Kolkata) timezone
     const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const currentHour = forceHour !== null ? forceHour : istTime.getHours();
 
-    // Enhanced logging
-    console.log(`\n⏰ ===== Scheduled Email Check =====`);
-    console.log(`🌍 Server Time (UTC): ${now.toISOString()}`);
-    console.log(`🇮🇳 IST Time: ${istTime.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hour12: false })}`);
-    console.log(`🕐 Current IST Hour: ${currentHour}`);
-    console.log(`${forceHour !== null ? '⚡ FORCED HOUR MODE' : ''}`);
-
     const ALERT_HOURS = [10, 18, 22];
 
-    if (ALERT_HOURS.includes(currentHour)) {
-        console.log(`✅ Hour ${currentHour} matches alert schedule - Processing users...`);
+    if (ALERT_HOURS.includes(currentHour) || isForceMode) {
+        console.log(`\n⏰ [${istTime.toLocaleTimeString()}] Scheduled Check: Starting processing...`);
         try {
-            const users = await User.find({});
-            console.log(`📋 Found ${users.length} users to check.`);
+            const users = await User.find({
+                email: { $ne: '' },
+                $or: [
+                    { 'preferences.enableEndOfDaySummary': true },
+                    { 'preferences.enableDailyReminder': true }
+                ]
+            }).select('username email leetcodeUsername dailyGoal preferences progress');
 
+            console.log(`📋 Processing ${users.length} eligible users.`);
+
+            let successCount = 0;
             for (const user of users) {
-                if (!user.email) continue;
-                if (!user.preferences.enableEndOfDaySummary && !user.preferences.enableDailyReminder) continue;
-
-                console.log(`\n📧 Processing user: ${user.username} (${user.email})`);
-
-                // Prepare Data
-                let lcStats = null;
-                let lcRecent = null;
-
                 try {
+                    let lcStats = null;
+                    let lcRecent = null;
+
                     if (user.leetcodeUsername) {
-                        console.log(`Debug: Fetching LC stats for ${user.leetcodeUsername}`);
                         const s = await getLeetCodeStats(user.leetcodeUsername);
-                        console.log(`Debug: LC stats fetched. Success: ${s.success}`);
-
-                        console.log(`Debug: Fetching Recent submissions`);
                         const r = await getRecentSubmissions(user.leetcodeUsername);
-                        console.log(`Debug: Recent fetched. Success: ${r.success}`);
-
                         if (s.success) lcStats = s.data;
                         if (r.success) lcRecent = r.data;
                     }
-                } catch (lcError) {
-                    console.error('Debug: LeetCode Service Error', lcError);
+
+                    const appStats = calculateAppStats(user);
+                    const emailService = require('./emailService');
+
+                    await emailService.sendMasterSummary(
+                        user.email,
+                        user.username,
+                        appStats,
+                        lcStats,
+                        lcRecent
+                    );
+                    successCount++;
+                } catch (userError) {
+                    console.error(`❌ Error processing user ${user.username}:`, userError.message);
                 }
-
-                console.log('Debug: Calculating App Stats');
-                const appStats = calculateAppStats(user);
-
-                console.log('Debug: Sending Email via Service');
-                // Use the required module directly or rely on the cached require
-                const emailService = require('./emailService');
-                if (!emailService.sendMasterSummary) {
-                    console.error('CRITICAL: sendMasterSummary function missing on emailService export!');
-                    console.log('Available exports:', Object.keys(emailService));
-                }
-
-                await emailService.sendMasterSummary(
-                    user.email,
-                    user.username,
-                    appStats,
-                    lcStats,
-                    lcRecent
-                );
-                console.log('Debug: Email sent function completed');
             }
-            console.log(`\n✅ Scheduled check complete - Processed ${users.length} users`);
-            return { success: true, count: users.length };
+            console.log(`✅ Scheduled check complete - Sent: ${successCount}/${users.length}`);
         } catch (error) {
             console.error('❌ Scheduled Check Error:', error);
-            return { success: false, error: error.message };
         }
     } else {
-        console.log(`⏭️  Hour ${currentHour} is not an alert hour (${ALERT_HOURS.join(', ')}). Skipping.`);
-        return { success: true, skipped: true, currentHour };
+        console.log(`⏭️  Hour ${currentHour} is not an alert hour. Skipping.`);
     }
 };
 
 // External Cron Trigger Endpoint
-app.get('/api/cron/trigger', async (req, res) => {
-    try {
-        // Allow voluntary force param for testing ?hour=22
-        const forceHour = req.query.hour ? parseInt(req.query.hour) : null;
+app.get('/api/cron/trigger', (req, res) => {
+    const forceHour = req.query.hour ? parseInt(req.query.hour) : null;
+    const isForceMode = req.query.force === 'true';
 
-        // Optional: Verify a secret if you want to secure this
-        // const authHeader = req.headers['authorization'];
-        // if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) { return res.status(401).json({ error: 'Unauthorized' }); }
+    // TRIGGER BACKGROUND PROCESSING
+    // Note: We don't 'await' here so the response returns immediately to avoid timeouts
+    runScheduledChecks(forceHour, isForceMode).catch(err => {
+        console.error('Background Cron Error:', err);
+    });
 
-        const result = await runScheduledChecks(forceHour);
-        res.json(result);
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
+    res.json({
+        success: true,
+        message: 'Cron process started in background',
+        timestamp: new Date().toISOString()
+    });
 });
 
 // Internal Cron (Backup/Development)
