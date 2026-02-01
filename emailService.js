@@ -40,8 +40,8 @@ const sendViaResend = async (to, subject, html) => {
       console.log('✅ Email sent via Resend:', data.id);
       return { success: true, method: 'resend', messageId: data.id };
     } else {
-      console.error('❌ Resend API Error:', data);
-      return { success: false, error: data.message || 'Resend API failed', details: data };
+      console.error('❌ Resend API Error:', data.message || 'Unknown error');
+      return { success: false, error: data.message || 'Resend API failed' };
     }
   } catch (error) {
     console.error('❌ Resend Fetch Error:', error);

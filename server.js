@@ -348,7 +348,9 @@ const runScheduledChecks = async (forceHour = null, isForceMode = false) => {
                     console.error(`❌ Error for ${user.username}:`, userError.message);
                 }
             }
-            console.log(`✅ Sent: ${successCount}/${users.length}`);
+            if (successCount > 0) {
+                console.log(`✅ Sent: ${successCount}/${users.length}`);
+            }
             return { success: true, sent: successCount, total: users.length };
         } catch (error) {
             console.error('❌ Scheduled Check Error:', error);
@@ -366,17 +368,27 @@ app.get('/api/cron/trigger', async (req, res) => {
     const isForceMode = req.query.force === 'true';
 
     try {
-        // On Vercel, we MUST await the process to ensure it completes before the function terminates
-        // However, this might hit the 10s timeout if there are MANY users.
-        // For now, we await it to ensure it actually runs.
-        const result = await runScheduledChecks(forceHour, isForceMode);
+        if (process.env.VERCEL === '1') {
+            // On Vercel, we MUST await the process to ensure it completes
+            const result = await runScheduledChecks(forceHour, isForceMode);
+            res.json({
+                success: true,
+                message: result.message || 'Cron process completed',
+                details: result,
+                timestamp: new Date().toISOString()
+            });
+        } else {
+            // On Render/Other, trigger in background and return immediately to avoid timeouts
+            runScheduledChecks(forceHour, isForceMode).catch(err => {
+                console.error('Background Cron Error:', err);
+            });
 
-        res.json({
-            success: true,
-            message: result.message || 'Cron process completed',
-            details: result,
-            timestamp: new Date().toISOString()
-        });
+            res.json({
+                success: true,
+                message: 'Cron process started in background',
+                timestamp: new Date().toISOString()
+            });
+        }
     } catch (err) {
         console.error('Cron Trigger Error:', err);
         res.status(500).json({
