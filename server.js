@@ -119,18 +119,26 @@ app.put('/api/user/:userId/progress', async (req, res) => {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
 
+        // Ensure problemId is a string for comparison
+        const pIdStr = String(problemId);
+
         // Check if problem already exists in progress
-        const problemIndex = user.progress.findIndex(p => p.problemId === problemId);
+        const problemIndex = user.progress.findIndex(p => String(p.problemId) === pIdStr);
 
         if (problemIndex > -1) {
-            // Update existing
-            user.progress[problemIndex] = { ...user.progress[problemIndex].toObject(), ...updates };
+            // Update existing using Mongoose .set() for better change detection
+            Object.keys(updates).forEach(key => {
+                user.progress[problemIndex][key] = updates[key];
+            });
+            // Explicitly mark as modified if using nested objects or arrays sometimes needed
+            user.markModified('progress');
         } else {
             // Add new
-            user.progress.push({ problemId, ...updates });
+            user.progress.push({ problemId: pIdStr, ...updates });
         }
 
         await user.save();
+        console.log(`✅ Progress updated for user: ${user.username}, problem: ${pIdStr}`);
         res.json({ success: true, progress: user.progress });
     } catch (error) {
         console.error('Progress Update Error:', error);
