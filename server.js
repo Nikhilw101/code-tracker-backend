@@ -298,7 +298,7 @@ const runScheduledChecks = async (forceHour = null, isForceMode = false) => {
     const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const currentHour = forceHour !== null ? forceHour : istTime.getHours();
 
-    const ALERT_HOURS = [10, 18, 22];
+    const ALERT_HOURS = [8, 10, 12, 14, 16, 18, 20, 22];
 
     if (ALERT_HOURS.includes(currentHour) || isForceMode) {
         console.log(`\n⏰ [${istTime.toLocaleTimeString()}] Scheduled Check: Starting processing...`);
