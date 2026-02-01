@@ -216,7 +216,9 @@ app.post('/api/email/send-reminder', async (req, res) => {
 
 // Helper to calculate App Stats from User Model
 const calculateAppStats = (user) => {
-    const todayStr = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+    const todayStr = istTime.toISOString().split('T')[0];
     const todayCompleted = user.progress.filter(p => p.status === 'done' && p.dateCompleted === todayStr).length;
 
     // Simple streak calc (simulated based on done count existence over days)
