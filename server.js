@@ -29,9 +29,14 @@ connectDB();
 
 // API Routes
 
-// Health check
+// Health check - minimal response for keep-alive pings
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', message: 'Backend server is running' });
+    res.status(200).send('ok'); // tiny response to keep Render awake
+});
+
+// Alternative health endpoint (same functionality)
+app.get('/health', (req, res) => {
+    res.status(200).send('ok');
 });
 
 // Auth Routes
@@ -373,40 +378,18 @@ const runScheduledChecks = async (forceHour = null, isForceMode = false) => {
 };
 
 // External Cron Trigger Endpoint
-app.get('/api/cron/trigger', async (req, res) => {
+// CRITICAL: Must respond immediately with minimal payload to avoid cron-job.org errors
+app.get('/api/cron/trigger', (req, res) => {
+    // Respond immediately with tiny response
+    res.status(200).send('ok');
+
+    // Run the actual task asynchronously (don't await)
     const forceHour = req.query.hour ? parseInt(req.query.hour) : null;
     const isForceMode = req.query.force === 'true';
 
-    try {
-        if (process.env.VERCEL === '1') {
-            // On Vercel, we MUST await the process to ensure it completes
-            const result = await runScheduledChecks(forceHour, isForceMode);
-            res.json({
-                success: true,
-                message: result.message || 'Cron process completed',
-                details: result,
-                timestamp: new Date().toISOString()
-            });
-        } else {
-            // On Render/Other, trigger in background and return immediately to avoid timeouts
-            runScheduledChecks(forceHour, isForceMode).catch(err => {
-                console.error('Background Cron Error:', err);
-            });
-
-            res.json({
-                success: true,
-                message: 'Cron process started in background',
-                timestamp: new Date().toISOString()
-            });
-        }
-    } catch (err) {
-        console.error('Cron Trigger Error:', err);
-        res.status(500).json({
-            success: false,
-            error: err.message,
-            timestamp: new Date().toISOString()
-        });
-    }
+    runScheduledChecks(forceHour, isForceMode).catch(err => {
+        console.error('❌ Background Cron Error:', err);
+    });
 });
 
 // Internal Cron (Backup/Development)
